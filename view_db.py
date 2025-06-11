@@ -12,7 +12,7 @@ columns = [col[1] for col in cur.fetchall()]
 print("Columns:", columns)
 
 # Show first 10 rows
-cur.execute(f"SELECT * FROM {table_name} LIMIT 10;")
+cur.execute(f"SELECT * FROM {table_name};")
 rows = cur.fetchall()
 for row in rows:
     print(row)

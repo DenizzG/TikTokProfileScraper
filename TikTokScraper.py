@@ -329,27 +329,28 @@ RELATED_KEYWORDS = {
     "solopreneur startup", "indie hacker startup"
     ]
 
-
 }
 
 FETCH_LIMIT = 15
-DB_FOLDER = "db"
-# ----------------------------
+DB_FILE = "tiktok_profiles.db"  # Single shared database file
 
-os.makedirs(DB_FOLDER, exist_ok=True)
+os.makedirs("db", exist_ok=True)
 
 async def scrape_profiles():
     async with TikTokApi() as api:
         await api.create_sessions(num_sessions=1, headless=False)
 
-        seen_usernames = set()  # Track all usernames seen across all umbrella keywords
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+
+        seen_usernames = set()
 
         for umbrella in UMBRELLA_KEYWORDS:
-            db_file = os.path.join(DB_FOLDER, f"{umbrella.replace(' ', '_').lower()}.db")
-            conn = sqlite3.connect(db_file)
-            cur = conn.cursor()
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS profiles (
+            table_name = umbrella.replace(' ', '_').lower()
+
+            # Create a separate table for each umbrella keyword
+            cur.execute(f'''
+                CREATE TABLE IF NOT EXISTS "{table_name}" (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE,
                     nickname TEXT,
@@ -371,7 +372,6 @@ async def scrape_profiles():
                 async for user in api.search.users(search_term=keyword, count=FETCH_LIMIT):
                     username = user.username
 
-                    # Skip if we've already seen this username
                     if username in seen_usernames:
                         print(f"🔁 Skipping recurring user: {username}")
                         continue
@@ -391,7 +391,6 @@ async def scrape_profiles():
                             print(f"⚠️ No username found — skipping user.")
                             continue
 
-                        # Check again after getting uniqueId
                         if username in seen_usernames:
                             print(f"🔁 Skipping recurring user after uniqueId: {username}")
                             continue
@@ -409,8 +408,8 @@ async def scrape_profiles():
 
                         if followers >= 10000:
                             try:
-                                cur.execute('''
-                                    INSERT OR IGNORE INTO profiles 
+                                cur.execute(f'''
+                                    INSERT OR IGNORE INTO "{table_name}"
                                     (username, nickname, bio, region, verified, followers, likes, videos, keyword)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 ''', (username, nickname, bio, region, int(verified), followers, likes, videos, keyword))
@@ -426,9 +425,9 @@ async def scrape_profiles():
                         print(f"❌ Unexpected error while processing user {username}: {e}")
 
             conn.commit()
-            conn.close()
-            print(f"\n✅ Done! All data saved to {db_file}")
+            print(f"\n✅ Done! All data saved to table '{table_name}'")
 
+        conn.close()
         await api.close_sessions()
 
 if __name__ == "__main__":
