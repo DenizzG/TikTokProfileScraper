@@ -4,14 +4,7 @@ import time
 from TikTokApi import TikTokApi
 import requests
 import os
-
-#proxy
-ADDRESS = "p.webshare.io"
-PORT = "80"
-USERNAME = "mvsvqjtt-rotate"
-PASSWORD = "3hiao7ruwcug"
-
-ROTATINGPROXY_STRING = f"http://{USERNAME}:{PASSWORD}@{ADDRESS}:{PORT}"
+import random, asyncio
 
 # ---------- CONFIG ----------
 UMBRELLA_KEYWORDS = [
@@ -55,7 +48,31 @@ RELATED_KEYWORDS = {
     "gaming news", "gaming leaks", "new games 2025", "gameplay highlights", 
     "funny gaming clips", "pro gamer", "streamer life", "competitive gaming", 
     "multiplayer gaming", "coop gaming", "gaming keyboard", "mechanical keyboard", 
-    "aim training", "gaming community", "gamer memes", "gaming addiction"
+    "aim training", "gaming community", "gamer memes", "gaming addiction",
+
+    # Add many more individual game titles:
+    "gta 5", "gta 6", "grand theft auto", "red dead redemption 2", "starfield",
+    "hogwarts legacy", "the last of us", "spider man 2", "god of war ragnarok",
+    "diablo 4", "lost ark", "genshin impact", "honkai star rail", "baldur's gate 3",
+    "palworld", "ark survival evolved", "rust", "escape from tarkov", 
+    "battlefield 2042", "pubg", "pubg mobile", "mobile legends", 
+    "wild rift", "pokemon unite", "pokemon scarlet violet", 
+    "zelda tears of the kingdom", "animal crossing", "splatoon 3",
+    "smash bros ultimate", "metroid dread", "halo infinite", "destiny 2",
+    "sea of thieves", "star citizen", "assassin's creed mirage", 
+    "cyberpunk 2077", "witcher 3", "stardew valley", "hades", 
+    "terraria", "valheim", "sons of the forest", "phasmaphobia",
+    "among us", "fall guys", "dead by daylight", "league of legends wild rift",
+    "osu", "beat saber", "vrchat", "pavlov vr", "population one",
+    "ark 2", "warzone 2", "mw3 2025", "roblox bedwars", 
+    "fortnite creative 2.0", "valorant montage", "rocket league", 
+    "paladins", "smite", "hearthstone", "runescape", "old school runescape",
+    "maplestory", "tower of fantasy", "summoners war", "clash royale",
+    "clash of clans", "brawl stars", "call of duty mobile", "apex mobile",
+    "rise of kingdoms", "war thunder", "world of tanks", "world of warships",
+    "monster hunter rise", "monster hunter world", "persona 5", 
+    "persona 3 reload", "final fantasy 16", "final fantasy 14", "farming simulator",
+    "efootball", "wwe 2k24", "madden 24", "f1 24"
     ],
     "crypto": [
     "crypto", "bitcoin", "ethereum", "solana", "dogecoin", "altcoin", "blockchain",
@@ -331,104 +348,136 @@ RELATED_KEYWORDS = {
 
 }
 
+# Config
+ADDRESS = "p.webshare.io"
+PORT = 80
+USERNAME = "mvsvqjtt-rotate"
+PASSWORD = "3hiao7ruwcug"
+ROTATINGPROXY = {"server": f"http://{USERNAME}:{PASSWORD}@{ADDRESS}:{PORT}"}
+
 FETCH_LIMIT = 15
-DB_FILE = "tiktok_profiles.db"  # Single shared database file
+RESET_AFTER = 1  # <-- Number of keywords after which to recreate TikTokApi()
+DB_FILE = "tiktok_profiles.db"
 
 os.makedirs("db", exist_ok=True)
 
+# Main async function
 async def scrape_profiles():
-    async with TikTokApi() as api:
-        await api.create_sessions(num_sessions=1, headless=False)
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    seen_usernames = set()
+    keyword_counter = 0
+    total_keywords = 0
 
-        conn = sqlite3.connect(DB_FILE)
-        cur = conn.cursor()
+    for umbrella in UMBRELLA_KEYWORDS:
+        table_name = umbrella.replace(' ', '_').lower()
 
-        seen_usernames = set()
+        cur.execute(f'''
+            CREATE TABLE IF NOT EXISTS "{table_name}" (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE,
+                nickname TEXT,
+                bio TEXT,
+                region TEXT,
+                verified BOOLEAN,
+                followers INTEGER,
+                likes INTEGER,
+                videos INTEGER,
+                keyword TEXT
+            )
+        ''')
+        conn.commit()
 
-        for umbrella in UMBRELLA_KEYWORDS:
-            table_name = umbrella.replace(' ', '_').lower()
+        related_keywords = RELATED_KEYWORDS.get(umbrella, [umbrella])
+        print(f"\n🔍 Searching for users for umbrella: {umbrella}")
 
-            # Create a separate table for each umbrella keyword
-            cur.execute(f'''
-                CREATE TABLE IF NOT EXISTS "{table_name}" (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE,
-                    nickname TEXT,
-                    bio TEXT,
-                    region TEXT,
-                    verified BOOLEAN,
-                    followers INTEGER,
-                    likes INTEGER,
-                    videos INTEGER,
-                    keyword TEXT
-                )
-            ''')
-            conn.commit()
+        for keyword in related_keywords:
+            keyword_counter += 1
+            total_keywords += 1
 
-            related_keywords = RELATED_KEYWORDS.get(umbrella, [umbrella])
-            print(f"\n🔍 Searching for users for umbrella: {umbrella}")
-            for keyword in related_keywords:
-                print(f"   ➡️ Using related keyword: {keyword}")
-                async for user in api.search.users(search_term=keyword, count=FETCH_LIMIT):
-                    username = user.username
+            # Recreate TikTokApi session every N keywords
+            if keyword_counter % RESET_AFTER == 1:
+                if keyword_counter > 1:
+                    await api.close_sessions()
+                    print("🔄 Reinitializing TikTokApi session...")
+                api = TikTokApi()
+                await api.create_sessions(num_sessions=2, headless=False, proxies=[ROTATINGPROXY], browser="chromium")
 
-                    if username in seen_usernames:
-                        print(f"🔁 Skipping recurring user: {username}")
+            print(f"   ➡️ Using related keyword: {keyword}")
+            async for user in api.search.users(search_term=keyword, count=FETCH_LIMIT):
+                username = user.username
+
+                if username in seen_usernames:
+                    print(f"🔁 Skipping recurring user: {username}")
+                    continue
+
+                try:
+                    user_data = await api.user(username=username).info()
+                    user_info = user_data.get('userInfo', {}).get('user', {})
+                    stats = user_data.get('userInfo', {}).get('stats', {})
+
+                    if not user_info or not stats:
+                        print(f"⚠️ Empty data for user {username}. Skipping...")
                         continue
 
-                    try:
-                        user_data = await api.user(username=username).info()
+                    username = user_info.get('uniqueId', None)
+                    if not username:
+                        print(f"⚠️ No username found — skipping user.")
+                        continue
 
-                        user_info = user_data.get('userInfo', {}).get('user', {})
-                        stats = user_data.get('userInfo', {}).get('stats', {})
+                    if username in seen_usernames:
+                        print(f"🔁 Skipping recurring user after uniqueId: {username}")
+                        continue
 
-                        if not user_info or not stats:
-                            print(f"⚠️ Empty data for user {username}. Skipping...")
-                            continue
+                    nickname = user_info.get('nickname', '')
+                    bio = user_info.get('signature', '')
+                    region = user_info.get('region', 'Unknown')
+                    verified = user_info.get('verified', False)
+                    followers = stats.get('followerCount', 0)
+                    likes = stats.get('heartCount', 0)
+                    videos = stats.get('videoCount', 0)
 
-                        username = user_info.get('uniqueId', None)
-                        if not username:
-                            print(f"⚠️ No username found — skipping user.")
-                            continue
+                    print(f"👤 {username} ({nickname}) - {followers} followers, {likes} likes, {videos} videos")
 
-                        if username in seen_usernames:
-                            print(f"🔁 Skipping recurring user after uniqueId: {username}")
-                            continue
-
-                        nickname = user_info.get('nickname', '')
-                        bio = user_info.get('signature', '')
-                        region = user_info.get('region', 'Unknown')
-                        verified = user_info.get('verified', False)
-
-                        followers = stats.get('followerCount', 0)
-                        likes = stats.get('heartCount', 0)
-                        videos = stats.get('videoCount', 0)
-
-                        print(f"👤 {username} ({nickname}) - {followers} followers, {likes} likes, {videos} videos")
-
-                        if followers >= 10000:
-                            try:
-                                cur.execute(f'''
-                                    INSERT OR IGNORE INTO "{table_name}"
-                                    (username, nickname, bio, region, verified, followers, likes, videos, keyword)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (username, nickname, bio, region, int(verified), followers, likes, videos, keyword))
-                                print(f"✅ Saved: {username} ({followers} followers)")
-                                seen_usernames.add(username)
-                            except sqlite3.Error as e:
-                                print(f"❌ DB error for {username}: {e}")
-                        else:
-                            print(f"⏩ Skipped: {username} ({followers} followers)")
+                    if followers >= 10000:
+                        try:
+                            cur.execute(f'''
+                                INSERT OR IGNORE INTO "{table_name}"
+                                (username, nickname, bio, region, verified, followers, likes, videos, keyword)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (username, nickname, bio, region, int(verified), followers, likes, videos, keyword))
+                            print(f"✅ Saved: {username} ({followers} followers)")
                             seen_usernames.add(username)
+                        except sqlite3.Error as e:
+                            print(f"❌ DB error for {username}: {e}")
+                    else:
+                        print(f"⏩ Skipped: {username} ({followers} followers)")
+                        seen_usernames.add(username)
 
-                    except Exception as e:
-                        print(f"❌ Unexpected error while processing user {username}: {e}")
+                except Exception as e:
+                    print(f"❌ Unexpected error while processing user {username}: {e}")
 
             conn.commit()
-            print(f"\n✅ Done! All data saved to table '{table_name}'")
+            if keyword_counter % 2 == 0:
+                await asyncio.sleep(random.uniform(0.4, 0.8))
+            if keyword_counter % 2 == 1:
+                await asyncio.sleep(random.uniform(2, 3.5))
 
-        conn.close()
+            # 🔧 RANDOM LONGER BREAK every 20 keywords to avoid soft bans
+            if total_keywords % 20 == 0:
+                print("☕ Taking a longer break...")
+                await asyncio.sleep(random.uniform(30, 60))
+
+        print(f"\n✅ Done! All data saved to table '{table_name}'")
+        
+        #random pause after each umbrella keyword
+        await asyncio.sleep(random.uniform(20, 40))
+
+    conn.close()
+    try:
         await api.close_sessions()
+    except:
+        pass
 
 if __name__ == "__main__":
     asyncio.run(scrape_profiles())
